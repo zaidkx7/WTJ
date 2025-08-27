@@ -4,7 +4,7 @@ import openpyxl
 import requests
 
 from bs4 import BeautifulSoup
-from clogger import get_logger
+from logger import get_logger
 from json.decoder import JSONDecodeError
 from openpyxl.styles import PatternFill, Alignment
 
@@ -39,9 +39,8 @@ class WTJScrapper:
         if script_tag:
             script_content = script_tag.text
             try:
-                json_data = script_content.split(
-                    'window.__INITIAL_DATA__ = ')[1].strip(' ;')
-                json_data = json_data.split('window.__FLAGS_DATA__ = ')[0]
+                json_data = script_content.split('window.__INITIAL_DATA__ = ')[1]
+                json_data = json_data.split('window.__GROWTHBOOK_PAYLOAD__ = ')[0]
                 return json.loads(json_data)
             except (IndexError, json.JSONDecodeError) as e:
                 self.logger.error(f"Error parsing JSON data: {e}")
@@ -51,7 +50,7 @@ class WTJScrapper:
     def get_necessary_json_data(self, json_data):
         try:
             parsed_data = json.loads(json_data)
-            return parsed_data['queries'][2]['state']['data']['results'][1:]
+            return parsed_data['queries'][2]['state']['data']['results']
         except (KeyError, IndexError, json.JSONDecodeError) as e:
             self.logger.error(f"Error extracting necessary data: {e}")
             return None
@@ -72,17 +71,13 @@ class WTJScrapper:
         return [self.API_URL + slug for slug in company_slugs]
 
     def get_company_website(self, slug):
-        try:
-            url = self.COMPANY_URL_TEMPLATE.format(slug=slug)
-            page = self.get_page(url)
-            soup = BeautifulSoup(page, 'html.parser')
-            website_tag = soup.find(
-                'a', class_='sc-fyVfxW hXemWC sc-eHsDsR hnvrnA')
-            if website_tag and website_tag['href']:
-                return website_tag['href']
-        except Exception as e:
-            self.logger.error(f"Error fetching website for {slug}: {e}")
-        return None
+        url = self.COMPANY_URL_TEMPLATE.format(slug=slug)
+        page = self.get_page(url)
+        soup = BeautifulSoup(page, 'html.parser')
+        website_tag = soup.find(
+            'a', class_='sc-fyVfxW hXemWC sc-eHsDsR hnvrnA')
+        if website_tag and website_tag['href']:
+            return website_tag['href']
 
     def extract_company_data(self, api_calls):
         for call in api_calls:
@@ -148,12 +143,11 @@ class WTJScrapper:
 
         return self.COMPANIES_INFO
 
-    def save_companies_info(self, companies_info):
+    def save_to_json(self, json_data):
         with open(f'{self.RESPONSE_DIR}/data.json', 'w') as file:
-            json.dump(companies_info, file, indent=2)
-        self.logger.info("Companies info saved")
+            json.dump(json_data, file, indent=4)
 
-    def save_companies_info_to_excel(self, companies_info):
+    def save_to_excel(self, data):
         workbook = openpyxl.Workbook()
         sheet = workbook.active
         sheet.title = "Companies Info"
@@ -172,7 +166,7 @@ class WTJScrapper:
                 horizontal="center", vertical="center", wrap_text=True)
 
         id = 0
-        for row_num, company in enumerate(companies_info, start=2):
+        for row_num, company in enumerate(data, start=2):
             row_data = [
                 id,
                 company.get('name'),
@@ -223,18 +217,30 @@ class WTJScrapper:
         soup = BeautifulSoup(page, 'html.parser')
         self.logger.info('WTJ page scraped')
         try:
+            self.logger.info('Trying to extract raw JSON from page')
             json_data = self.extract_json_data(soup)
+            self.logger.info('Got raw JSON')
+            self.logger.info('Trying to extract necessary data from JSON')
             json_data = self.get_necessary_json_data(json_data)
+            self.logger.info('Got necessary data')
+            self.save_to_json(json_data)
             if json_data:
+                self.logger.info('Getting company slugs')
                 slugs = self.get_company_slugs(json_data)
+                self.logger.info('Got company slugs')
                 api_calls = self.gather_api_calls(slugs)
+                self.logger.info('Gathered API calls')
                 companies = self.extract_company_data(api_calls)
-                self.save_companies_info(companies)
-                self.save_companies_info_to_excel(companies)
+                self.logger.info('Extracted company data')
+                self.save_to_json(companies)
+                self.logger.info('Companies info saved to JSON')
         except JSONDecodeError as e:
             self.logger.error(f"Error extracting JSON data: {e}")
             return None
 
+def run():
+    return WTJScrapper()
+
 
 if __name__ == "__main__":
-    WTJScrapper().run()
+    run().run()
